@@ -48,6 +48,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 /*---------------------------------------------------------------------------*/
 #ifdef CONTIKI_WATCHDOG_CONF_TIMER_TOP
 #define CONTIKI_WATCHDOG_TIMER_TOP CONTIKI_WATCHDOG_CONF_TIMER_TOP
