@@ -37,7 +37,7 @@
 
 /* Set to run orchestra */
 #ifndef WITH_ORCHESTRA
-#define WITH_ORCHESTRA 0
+#define WITH_ORCHESTRA 1
 #endif /* WITH_ORCHESTRA */
 
 /* Set to enable TSCH security */
@@ -99,7 +99,7 @@
 /* TSCH logging. 0: disabled. 1: basic log. 2: with delayed
  * log messages from interrupt */
 #undef TSCH_LOG_CONF_LEVEL
-#define TSCH_LOG_CONF_LEVEL 2
+#define TSCH_LOG_CONF_LEVEL 1
 
 /* IEEE802.15.4 PANID */
 #undef IEEE802154_CONF_PANID
@@ -184,5 +184,30 @@
 #if CONTIKI_TARGET_COOJA
 #define COOJA_CONF_SIMULATE_TURNAROUND 0
 #endif /* CONTIKI_TARGET_COOJA */
+
+/*******************************************************/
+/************* BLE CONN configuration **************/
+/*******************************************************/
+
+#define PACKETBUF_CONF_SIZE                  260
+#define QUEUEBUF_CONF_NUM                       1
+//#define UIP_CONF_BUFFER_SIZE                 1280
+//*
+//#define CC26XX_CONF_RADIO_MODE          CC26XX_RADIO_MODE_BLE
+#define NETSTACK_CONF_RADIO_BLE                 ble_cc2650_driver
+#define NETSTACK_CONF_RDC_BLE                   ble_null_par_driver
+#define NETSTACK_CONF_MAC_BLE                   ble_l2cap_driver
+
+//*/
+#define RTIMER_CONF_MULTIPLE_ACCESS       1
+
+/* BLE radio settings */
+#define BLE_MODE_CONF_INIT_PEER_ADDR    0x247189E72804 //0x247189E73005// 0x247189E63382 //0x247189E6EE04 (Node-1) //0x247189E72804 (Node-2) 
+
+#define BLE_MODE_CONF_MAX_CONNECTIONS		1
+
+#define BLE_MODE_CONF_CONN_CHANNEL_MAP			0x1FFFFFFFFFULL
+#define BLE_CONF_CONNECTION_INTERVAL			210
+#define BLE_CONF_CONNECTION_SLAVE_LATENCY		0
 
 #endif /* __PROJECT_CONF_H__ */
