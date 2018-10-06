@@ -5,6 +5,7 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
+ *
  * 1. Redistributions of source code must retain the above copyright
  *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
@@ -31,21 +32,35 @@
  */
 
 /**
+ *
  * \file
  *         Initialiation file for the Contiki low-layer network stack (NETSTACK)
  * \author
  *         Adam Dunkels <adam@sics.se>
+ *
  */
 
 #include "net/netstack.h"
+#include "/home/user/contiki/apps/scylla/scylla.h"
+#if BLE_STACK_SUPPORT
+#include <cpu/cc26xx-cc13xx/dev/ble-hal.h>
+#include <rf-core/ble-hal/ble-hal-cc26xx.h>
+#endif
 /*---------------------------------------------------------------------------*/
-void
-netstack_init(void)
-{
-  NETSTACK_RADIO.init();
-  NETSTACK_RDC.init();
-  NETSTACK_LLSEC.init();
-  NETSTACK_MAC.init();
-  NETSTACK_NETWORK.init();
+void netstack_init(void) {
+
+/*Scylla: For initialization of stack variables defined in netstack.h*/
+#if BLE_STACK_SUPPORT
+	NETSTACK_RADIO = NETSTACK_RADIO_IEEE;
+	NETSTACK_RDC = NETSTACK_RDC_IEEE;
+	NETSTACK_MAC = NETSTACK_MAC_IEEE;
+	ACTIVE_STACK = STACK_IEEE;
+#endif
+	ACTIVE_STACK = STACK_IEEE;
+	NETSTACK_RADIO.init();
+	NETSTACK_RDC.init();
+	NETSTACK_LLSEC.init();
+	NETSTACK_MAC.init();
+	NETSTACK_NETWORK.init();
 }
 /*---------------------------------------------------------------------------*/

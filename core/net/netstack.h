@@ -42,6 +42,9 @@
 #define NETSTACK_H
 
 #include "contiki-conf.h"
+#include "/home/user/contiki/apps/scylla/scylla.h"
+
+
 
 #ifndef NETSTACK_NETWORK
 #ifdef NETSTACK_CONF_NETWORK
@@ -59,6 +62,7 @@
 #endif /* NETSTACK_CONF_LLSEC */
 #endif /* NETSTACK_LLSEC */
 
+#if !BLE_STACK_SUPPORT
 #ifndef NETSTACK_MAC
 #ifdef NETSTACK_CONF_MAC
 #define NETSTACK_MAC NETSTACK_CONF_MAC
@@ -74,6 +78,7 @@
 #define NETSTACK_RDC     nullrdc_driver
 #endif /* NETSTACK_CONF_RDC */
 #endif /* NETSTACK_RDC */
+#endif
 
 #ifndef NETSTACK_RDC_CHANNEL_CHECK_RATE
 #ifdef NETSTACK_CONF_RDC_CHANNEL_CHECK_RATE
@@ -88,7 +93,7 @@
 #error Change NETSTACK_RDC_CONF_CHANNEL_CHECK_RATE in contiki-conf.h, project-conf.h or in your Makefile.
 #endif
 
-
+#if !BLE_STACK_SUPPORT
 #ifndef NETSTACK_RADIO
 #ifdef NETSTACK_CONF_RADIO
 #define NETSTACK_RADIO NETSTACK_CONF_RADIO
@@ -96,6 +101,33 @@
 #define NETSTACK_RADIO   nullradio_driver
 #endif /* NETSTACK_CONF_RADIO */
 #endif /* NETSTACK_RADIO */
+#endif
+
+/*************** BLE CONFIGS  ********************/
+
+#if BLE_STACK_SUPPORT
+
+#ifndef NETSTACK_MAC_BLE
+#ifdef NETSTACK_CONF_MAC_BLE
+#define NETSTACK_MAC_BLE NETSTACK_CONF_MAC_BLE
+#endif /* NETSTACK_CONF_MAC_BLE */
+#endif /* NETSTACK_MAC_BLE */
+
+#ifndef NETSTACK_RDC_BLE
+#ifdef NETSTACK_CONF_RDC_BLE
+#define NETSTACK_RDC_BLE NETSTACK_CONF_RDC_BLE
+#endif /* NETSTACK_CONF_RDC_BLE */
+#endif /* NETSTACK_RDC_BLE */
+
+#ifndef NETSTACK_RADIO_BLE
+#ifdef NETSTACK_CONF_RADIO_BLE
+#define NETSTACK_RADIO_BLE NETSTACK_CONF_RADIO_BLE
+#endif /* NETSTACK_CONF_RADIO_BLE */
+#endif /* NETSTACK_RADIO_BLE */
+
+#endif
+/*************** BLE CONFIGS  ********************/
+
 
 #ifndef NETSTACK_FRAMER
 #ifdef NETSTACK_CONF_FRAMER
@@ -125,11 +157,35 @@ struct network_driver {
 };
 
 extern const struct network_driver NETSTACK_NETWORK;
-extern const struct llsec_driver   NETSTACK_LLSEC;
-extern const struct rdc_driver     NETSTACK_RDC;
-extern const struct mac_driver     NETSTACK_MAC;
-extern const struct radio_driver   NETSTACK_RADIO;
-extern const struct framer         NETSTACK_FRAMER;
+extern const struct llsec_driver NETSTACK_LLSEC;
+extern const struct framer NETSTACK_FRAMER;
+
+#if !BLE_STACK_SUPPORT
+extern const struct radio_driver NETSTACK_RADIO;
+extern const struct rdc_driver NETSTACK_RDC;
+extern const struct mac_driver NETSTACK_MAC;
+#endif
+
+#if BLE_STACK_SUPPORT
+
+#define NETSTACK_RADIO_IEEE NETSTACK_CONF_RADIO
+#define NETSTACK_RDC_IEEE NETSTACK_CONF_RDC
+#define NETSTACK_MAC_IEEE NETSTACK_CONF_MAC
+
+struct rdc_driver NETSTACK_RDC;
+struct mac_driver NETSTACK_MAC;
+struct radio_driver NETSTACK_RADIO;
+
+extern const struct radio_driver NETSTACK_RADIO_BLE;
+extern const struct rdc_driver NETSTACK_RDC_BLE;
+extern const struct mac_driver NETSTACK_MAC_BLE;
+
+extern const struct radio_driver NETSTACK_RADIO_IEEE;
+extern const struct rdc_driver NETSTACK_RDC_IEEE;
+extern const struct mac_driver NETSTACK_MAC_IEEE;
+
+#endif
+
 
 void netstack_init(void);
 
