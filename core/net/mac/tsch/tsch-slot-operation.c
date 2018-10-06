@@ -54,6 +54,13 @@
 #include "net/mac/tsch/tsch-packet.h"
 #include "net/mac/tsch/tsch-security.h"
 #include "net/mac/tsch/tsch-adaptive-timesync.h"
+#include "cpu/cc26xx-cc13xx/dev/ble-hal.h"
+#include "net/netstack.h"
+#include <stdio.h>
+#include <string.h>
+#include "dev/watchdog.h"
+#include "/home/user/contiki/apps/scylla/scylla.h"
+
 #if CONTIKI_TARGET_COOJA || CONTIKI_TARGET_COOJA_IP64
 #include "lib/simEnvChange.h"
 #include "sys/cooja_mt.h"
@@ -173,6 +180,30 @@ struct tsch_link *current_link = NULL;
 static struct tsch_link *backup_link = NULL;
 static struct tsch_packet *current_packet = NULL;
 static struct tsch_neighbor *current_neighbor = NULL;
+
+/************* START: SCYLLA DECLARATIONS **********************/
+
+static uint16_t counter_cycle = 0;
+static uint16_t cycle_wait = 25; // To introduce wait for 25 cycles
+static rtimer_clock_t reference_time;
+
+int l2cap_conn_created =0;
+int ble_stack_start=0;
+
+static int hold_ble = 0;
+static int ble_slot_counter = 0;
+static rtimer_clock_t wake_up = 0 ;
+
+rtimer_clock_t tsch_init_temp=0;
+uint8_t time_adjustment_blocker=0;
+static uint8_t beacon_link_ind = 0;
+static rtimer_clock_t temp_dc = 0;
+
+static rtimer_clock_t queue_temp=0;
+static rtimer_clock_t tx_temp = 0;
+static rtimer_clock_t tsch_next_slot_interval = 0;
+static  uint8_t i=0;
+/************* END: SCYLLA DECLARATIONS **********************/
 
 /* Protothread for association */
 PT_THREAD(tsch_scan(struct pt *pt));
@@ -409,6 +440,7 @@ static void
 tsch_radio_on(enum tsch_radio_state_on_cmd command)
 {
   int do_it = 0;
+
   switch(command) {
   case TSCH_RADIO_CMD_ON_START_OF_TIMESLOT:
     if(TSCH_RADIO_ON_DURING_TIMESLOT) {
@@ -425,6 +457,7 @@ tsch_radio_on(enum tsch_radio_state_on_cmd command)
     break;
   }
   if(do_it) {
+
     NETSTACK_RADIO.on();
   }
 }
@@ -456,9 +489,15 @@ tsch_radio_off(enum tsch_radio_state_off_cmd command)
     break;
   }
   if(do_it) {
-    NETSTACK_RADIO.off();
+
+	  NETSTACK_RADIO.off();
+		if (counter_cycle <= cycle_wait){
+			counter_cycle++;
+		}
+
   }
 }
+
 /*---------------------------------------------------------------------------*/
 static
 PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
@@ -480,6 +519,8 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
   uint8_t in_queue;
   static int dequeued_index;
   static int packet_ready = 1;
+  static uint8_t seqno;
+
 
   PT_BEGIN(pt);
 
@@ -501,7 +542,7 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
       /* packet payload length */
       static uint8_t packet_len;
       /* packet seqno */
-      static uint8_t seqno;
+      //static uint8_t seqno;
       /* is this a broadcast packet? (wait for ack?) */
       static uint8_t is_broadcast;
       static rtimer_clock_t tx_start_time;
@@ -517,6 +558,15 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
       is_broadcast = current_neighbor->is_broadcast;
       /* read seqno from payload */
       seqno = ((uint8_t *)(packet))[2];
+
+#if TSCH_UIP_CLIENT
+		for (i = 0; i < TX_SIZE; i++) {
+			if (dp_seqno[i] == seqno) {
+				break;
+			}
+		}
+#endif
+
       /* if this is an EB, then update its Sync-IE */
       if(current_neighbor == n_eb) {
         packet_ready = tsch_packet_update_eb(packet, packet_len, current_packet->tsch_sync_ie_offset);
@@ -558,17 +608,34 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
         } else
 #endif /* CCA_ENABLED */
         {
+          watchdog_periodic();
           /* delay before TX */
+          /*if(latency_ind != 99){
+        	  dp_queued[latency_ind] = RTIMER_NOW() - dp_app_tx[latency_ind];
+          }*/
+          queue_temp = RTIMER_NOW();
+
           TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start, tsch_timing[tsch_ts_tx_offset] - RADIO_DELAY_BEFORE_TX, "TxBeforeTx");
           TSCH_DEBUG_TX_EVENT();
+
+#if TSCH_UIP_SERVER
+          total_zigbee_beacon_tx += packet_len; // Hassan
+#endif
+
           /* send packet already in radio tx buffer */
           mac_tx_status = NETSTACK_RADIO.transmit(packet_len);
+
+
+
           /* Save tx timestamp */
           tx_start_time = current_slot_start + tsch_timing[tsch_ts_tx_offset];
           /* calculate TX duration based on sent packet len */
           tx_duration = TSCH_PACKET_DURATION(packet_len);
           /* limit tx_time to its max value */
           tx_duration = MIN(tx_duration, tsch_timing[tsch_ts_max_tx]);
+
+          tx_temp = tx_duration;
+
           /* turn tadio off -- will turn on again to wait for ACK if needed */
           tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
 
@@ -588,6 +655,7 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
               NETSTACK_RADIO.get_value(RADIO_PARAM_RX_MODE, &radio_rx_mode);
               NETSTACK_RADIO.set_value(RADIO_PARAM_RX_MODE, radio_rx_mode & (~RADIO_RX_MODE_ADDRESS_FILTER));
 #endif /* TSCH_HW_FRAME_FILTERING */
+              watchdog_periodic();
               /* Unicast: wait for ack after tx: sleep until ack time */
               TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start,
                   tsch_timing[tsch_ts_tx_offset] + tx_duration + tsch_timing[tsch_ts_rx_ack_delay] - RADIO_DELAY_BEFORE_RX, "TxBeforeAck");
@@ -677,7 +745,13 @@ PT_THREAD(tsch_tx_slot(struct pt *pt, struct rtimer *t))
         }
       }
     }
-
+#if TSCH_UIP_CLIENT
+    if (i < TX_SIZE && mac_tx_status == MAC_TX_OK && queue_temp > 0) {
+    	dp_queued[i] = queue_temp - dp_app_tx[i];
+    	dp_mac_tx[i] = tx_temp;
+       // printf("$ %d\n\r", i);
+    }
+#endif
     tsch_radio_off(TSCH_RADIO_CMD_OFF_END_OF_TIMESLOT);
 
     current_packet->transmissions++;
@@ -758,12 +832,15 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
 
     current_input = &input_array[input_index];
 
+
+
     /* Wait before starting to listen */
     TSCH_SCHEDULE_AND_YIELD(pt, t, current_slot_start, tsch_timing[tsch_ts_rx_offset] - RADIO_DELAY_BEFORE_RX, "RxBeforeListen");
     TSCH_DEBUG_RX_EVENT();
 
     /* Start radio for at least guard time */
     tsch_radio_on(TSCH_RADIO_CMD_ON_WITHIN_TIMESLOT);
+
     packet_seen = NETSTACK_RADIO.receiving_packet() || NETSTACK_RADIO.pending_packet();
     if(!packet_seen) {
       /* Check if receiving within guard time */
@@ -777,11 +854,12 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
       TSCH_DEBUG_RX_EVENT();
       /* Save packet timestamp */
       rx_start_time = RTIMER_NOW() - RADIO_DELAY_BEFORE_DETECT;
-
+      watchdog_periodic();
       /* Wait until packet is received, turn radio off */
       BUSYWAIT_UNTIL_ABS(!NETSTACK_RADIO.receiving_packet(),
           current_slot_start, tsch_timing[tsch_ts_rx_offset] + tsch_timing[tsch_ts_rx_wait] + tsch_timing[tsch_ts_max_tx]);
       TSCH_DEBUG_RX_EVENT();
+
       tsch_radio_off(TSCH_RADIO_CMD_OFF_WITHIN_TIMESLOT);
 
       if(NETSTACK_RADIO.pending_packet()) {
@@ -931,70 +1009,108 @@ PT_THREAD(tsch_rx_slot(struct pt *pt, struct rtimer *t))
 
   PT_END(pt);
 }
+
 /*---------------------------------------------------------------------------*/
 /* Protothread for slot operation, called from rtimer interrupt
  * and scheduled from tsch_schedule_slot_operation */
 static
-PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
-{
-  TSCH_DEBUG_INTERRUPT();
-  PT_BEGIN(&slot_operation_pt);
+PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr)) {
+TSCH_DEBUG_INTERRUPT();
+PT_BEGIN(&slot_operation_pt);
 
-  /* Loop over all active slots */
-  while(tsch_is_associated) {
+/* Loop over all active slots */
+while (tsch_is_associated) {
 
-    if(current_link == NULL || tsch_lock_requested) { /* Skip slot operation if there is no link
-                                                          or if there is a pending request for getting the lock */
-      /* Issue a log whenever skipping a slot */
-      TSCH_LOG_ADD(tsch_log_message,
-                      snprintf(log->message, sizeof(log->message),
-                          "!skipped slot %u %u %u",
-                            tsch_locked,
-                            tsch_lock_requested,
-                            current_link == NULL);
-      );
+	wake_up = RTIMER_NOW();
+	hold_ble = 0;
+	queue_temp = 0;
+	tx_temp = 0;
 
-    } else {
-      int is_active_slot;
-      TSCH_DEBUG_SLOT_START();
-      tsch_in_slot_operation = 1;
-      /* Reset drift correction */
-      drift_correction = 0;
-      is_drift_correction_used = 0;
-      /* Get a packet ready to be sent */
-      current_packet = get_packet_and_neighbor_for_link(current_link, &current_neighbor);
-      /* There is no packet to send, and this link does not have Rx flag. Instead of doing
-       * nothing, switch to the backup link (has Rx flag) if any. */
-      if(current_packet == NULL && !(current_link->link_options & LINK_OPTION_RX) && backup_link != NULL) {
-        current_link = backup_link;
-        current_packet = get_packet_and_neighbor_for_link(current_link, &current_neighbor);
-      }
-      is_active_slot = current_packet != NULL || (current_link->link_options & LINK_OPTION_RX);
-      if(is_active_slot) {
-        /* Hop channel */
-        current_channel = tsch_calculate_channel(&tsch_current_asn, current_link->channel_offset);
-        NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, current_channel);
-        /* Turn the radio on already here if configured so; necessary for radios with slow startup */
-        tsch_radio_on(TSCH_RADIO_CMD_ON_START_OF_TIMESLOT);
-        /* Decide whether it is a TX/RX/IDLE or OFF slot */
-        /* Actual slot operation */
-        if(current_packet != NULL) {
-          /* We have something to transmit, do the following:
-           * 1. send
-           * 2. update_backoff_state(current_neighbor)
-           * 3. post tx callback
-           **/
-          static struct pt slot_tx_pt;
-          PT_SPAWN(&slot_operation_pt, &slot_tx_pt, tsch_tx_slot(&slot_tx_pt, t));
-        } else {
-          /* Listen */
-          static struct pt slot_rx_pt;
-          PT_SPAWN(&slot_operation_pt, &slot_rx_pt, tsch_rx_slot(&slot_rx_pt, t));
-        }
-      }
-      TSCH_DEBUG_SLOT_END();
-    }
+/* BLE_STACK_SUPPORT
+ * if this flag is set then scylla will start assigning time slice to BLE*/
+#if BLE_STACK_SUPPORT
 
+	if (ble_slot_counter == 1) {
+		ble_slot_counter++;
+	} else if (ble_slot_counter == 2) {
+		ble_master_wakeup_flag = 0;
+		ble_slot_counter = 0;
+		tsch_in_slot_operation = 0;
+		if (ACTIVE_STACK == STACK_BLE) {
+			scylla_netstack_switch(STACK_IEEE);
+		}
+	}
+	if (l2cap_conn_created == 1 && ble_slot_counter == 0 && beacon_link_ind == 0) {
+		if (ble_master_wakeup > wake_up && (ble_master_wakeup - wake_up) < 656) {
+			ble_master_wakeup_flag = 1;
+			ble_slot_counter = 1;
+			tsch_in_slot_operation = 0;
+			if (ACTIVE_STACK == STACK_IEEE) {
+				scylla_netstack_switch(STACK_BLE);
+			}
+		} else if (ble_master_wakeup < wake_up ) {
+			printf("BLE woke up %u ticks behind TSCH slot\n", wake_up - ble_master_wakeup);
+		}
+	}
+
+#endif
+	if (current_link == NULL || tsch_lock_requested) { /* Skip slot operation if there is no link
+	 or if there is a pending request for getting the lock */
+		/* Issue a log whenever skipping a slot */
+		TSCH_LOG_ADD(tsch_log_message,
+				snprintf(log->message, sizeof(log->message), "!skipped slot %u %u %u", tsch_locked, tsch_lock_requested, current_link == NULL););
+
+	} else {
+		int is_active_slot;
+		TSCH_DEBUG_SLOT_START();
+		tsch_in_slot_operation = 1;
+		/* Reset drift correction */
+		drift_correction = 0;
+		is_drift_correction_used = 0;
+		/* Get a packet ready to be sent */
+		current_packet = get_packet_and_neighbor_for_link(current_link,
+				&current_neighbor);
+		/* There is no packet to send, and this link does not have Rx flag. Instead of doing
+		 * nothing, switch to the backup link (has Rx flag) if any. */
+		if (current_packet == NULL
+				&& !(current_link->link_options & LINK_OPTION_RX)
+				&& backup_link != NULL) {
+			current_link = backup_link;
+			current_packet = get_packet_and_neighbor_for_link(current_link,
+					&current_neighbor);
+		}
+		is_active_slot = current_packet != NULL
+				|| (current_link->link_options & LINK_OPTION_RX);
+		beacon_link_ind = 0;
+
+		if (is_active_slot && !ble_master_wakeup_flag) {
+			/* Hop channel */
+			current_channel = tsch_calculate_channel(&tsch_current_asn,
+					current_link->channel_offset);
+			NETSTACK_RADIO.set_value(RADIO_PARAM_CHANNEL, current_channel);
+			/* Turn the radio on already here if configured so; necessary for radios with slow startup */
+			tsch_radio_on(TSCH_RADIO_CMD_ON_START_OF_TIMESLOT);
+			/* Decide whether it is a TX/RX/IDLE or OFF slot */
+			/* Actual slot operation */
+			if (current_packet != NULL) {
+				/* We have something to transmit, do the following:
+				 * 1. send
+				 * 2. update_backoff_state(current_neighbor)
+				 * 3. post tx callback
+				 **/
+				//watchdog_periodic();
+				static struct pt slot_tx_pt;
+				PT_SPAWN(&slot_operation_pt, &slot_tx_pt,
+						tsch_tx_slot(&slot_tx_pt, t));
+			} else {
+				/* Listen */
+				//watchdog_periodic();
+				static struct pt slot_rx_pt;
+				PT_SPAWN(&slot_operation_pt, &slot_rx_pt,
+						tsch_rx_slot(&slot_rx_pt, t));
+			}
+		} TSCH_DEBUG_SLOT_END();
+	}
     /* End of slot operation, schedule next slot or resynchronize */
 
     /* Do we need to resynchronize? i.e., wait for EB again */
@@ -1014,6 +1130,7 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
       rtimer_clock_t prev_slot_start;
       /* Time to next wake up */
       rtimer_clock_t time_to_next_active_slot;
+      tsch_next_slot_interval = 0;
       /* Schedule next wakeup skipping slots if missed deadline */
       do {
         if(current_link != NULL
@@ -1030,7 +1147,14 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
           /* There is no next link. Fall back to default
            * behavior: wake up at the next slot. */
           timeslot_diff = 1;
+        }else {
+        	if(current_link->slotframe_handle == 0 && ble_slot_counter == 0){
+        		beacon_link_ind = 1;
+        	}
         }
+#if	BLE_STACK_SUPPORT
+        timeslot_diff = 1;
+#endif
         /* Update ASN */
         TSCH_ASN_INC(tsch_current_asn, timeslot_diff);
         /* Time to next wake up */
@@ -1038,14 +1162,48 @@ PT_THREAD(tsch_slot_operation(struct rtimer *t, void *ptr))
         drift_correction = 0;
         is_drift_correction_used = 0;
         /* Update current slot start */
-        prev_slot_start = current_slot_start;
-        current_slot_start += time_to_next_active_slot;
-        current_slot_start += tsch_timesync_adaptive_compensate(time_to_next_active_slot);
+
+		prev_slot_start = current_slot_start;
+		current_slot_start += time_to_next_active_slot;
+		current_slot_start += tsch_timesync_adaptive_compensate(time_to_next_active_slot);
       } while(!tsch_schedule_slot_operation(t, prev_slot_start, time_to_next_active_slot, "main"));
     }
+/* In this condtion connection with BLE slave is established*/
+#if NODE_ROLE_SERVER && BLE_STACK_SUPPORT
 
-    tsch_in_slot_operation = 0;
-    PT_YIELD(&slot_operation_pt);
+	if (counter_cycle >= cycle_wait && !hold_ble && l2cap_conn_created == 0) {
+		tsch_in_slot_operation = 1;
+
+		/* Switch wireless stack parameters*/
+		scylla_netstack_switch(STACK_BLE);
+
+		if (!l2cap_conn_created) {
+			NETSTACK_MAC.init();
+		}
+
+		/* Waiting in the loop until the connection is established*/
+		while (!l2cap_conn_created) {
+			PT_YIELD(&slot_operation_pt);
+			reference_time = RTIMER_NOW() + CYCLES_10MS;
+			rtimer_set(t, reference_time, 1,
+					(void (*)(struct rtimer *, void *)) tsch_slot_operation,
+					NULL);
+		}
+		printf("BLE Conn Established.\n");
+
+		if (ACTIVE_STACK != STACK_IEEE) {
+			scylla_netstack_switch(STACK_IEEE);
+		}
+		/* Once the connection on BLE is established, Scylla starts the beacons of TSCH so
+		 * that TSCH child nodes can sync with this node*/
+		scylla_start_beacons();
+	}
+
+#endif
+
+	tsch_in_slot_operation = 0;
+
+	PT_YIELD(&slot_operation_pt);
   }
 
   PT_END(&slot_operation_pt);
@@ -1060,6 +1218,9 @@ tsch_slot_operation_start(void)
   rtimer_clock_t time_to_next_active_slot;
   rtimer_clock_t prev_slot_start;
   TSCH_DEBUG_INIT();
+
+  beacon_link_ind = 0;
+
   do {
     uint16_t timeslot_diff;
     /* Get next active link */
