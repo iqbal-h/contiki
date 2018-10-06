@@ -224,7 +224,7 @@ static uint64_t last_rat_timestamp64 = 0;
 static struct ctimer rat_overflow_timer;
 static volatile uint32_t rat_overflow_counter = 0;
 static rtimer_clock_t last_rat_overflow = 0;
-
+static uint8_t hf_block=0;
 /* RAT has 32-bit register, overflows once 18 minutes */
 #define RAT_RANGE  4294967296ull
 /* approximate value */
@@ -901,6 +901,9 @@ transmit(unsigned short transmit_len)
   rtimer_clock_t t0;
   volatile rfc_CMD_IEEE_TX_t cmd;
 
+	if(ACTIVE_STACK == STACK_BLE){
+			  printf("\n**IEEE 1\n");
+		  }
   if(!rf_is_on()) {
     was_off = 1;
     if(on() != RF_CORE_CMD_OK) {
@@ -1006,6 +1009,9 @@ transmit(unsigned short transmit_len)
 static int
 send(const void *payload, unsigned short payload_len)
 {
+	if(ACTIVE_STACK == STACK_BLE){
+		  printf("\n**IEEE Wrong call Send\n");
+	  }
   prepare(payload, payload_len);
   return transmit(payload_len);
 }
@@ -1250,6 +1256,9 @@ on(void)
    * If we are in the middle of a BLE operation, we got called by ContikiMAC
    * from within an interrupt context. Abort, but pretend everything is OK.
    */
+	if(ACTIVE_STACK == STACK_BLE){
+			  printf("\n**IEEE Wrong call ON\n");
+		  }
   if(rf_ble_is_active() == RF_BLE_ACTIVE) {
     PRINTF("on: Interrupt context but BLE in progress\n");
     return RF_CORE_CMD_OK;
@@ -1259,8 +1268,9 @@ on(void)
    * Request the HF XOSC as the source for the HF clock. Needed before we can
    * use the FS. This will only request, it will _not_ perform the switch.
    */
-  oscillators_request_hf_xosc();
-
+	if (!hf_block) {
+		oscillators_request_hf_xosc();
+	}
   if(rf_is_on()) {
     PRINTF("on: We were on. PD=%u, RX=0x%04x \n", rf_core_is_accessible(),
            RF_RADIO_OP_GET_STATUS(cmd_ieee_rx_buf));
@@ -1275,7 +1285,9 @@ on(void)
    * requested it early on, this won't be too long a wait.
    * This should be done before starting the RAT.
    */
-  oscillators_switch_to_hf_xosc();
+  if (!hf_block) {
+	  oscillators_switch_to_hf_xosc();
+  }
 
   if(rf_core_boot() != RF_CORE_CMD_OK) {
     PRINTF("on: rf_core_boot() failed\n");
@@ -1288,7 +1300,7 @@ on(void)
     PRINTF("on: radio_setup() failed\n");
     return RF_CORE_CMD_ERROR;
   }
-
+  //hf_block = 0;
   return rx_on();
 }
 /*---------------------------------------------------------------------------*/
@@ -1299,6 +1311,9 @@ off(void)
    * If we are in the middle of a BLE operation, we got called by ContikiMAC
    * from within an interrupt context. Abort, but pretend everything is OK.
    */
+  if(ACTIVE_STACK == STACK_BLE){
+	  printf("\n**IEEE Wrong call OFF\n");
+  }
   if(rf_ble_is_active() == RF_BLE_ACTIVE) {
     PRINTF("off: Interrupt context but BLE in progress\n");
     return RF_CORE_CMD_OK;
@@ -1312,7 +1327,7 @@ off(void)
 
   ENERGEST_OFF(ENERGEST_TYPE_LISTEN);
 
-#if !CC2650_FAST_RADIO_STARTUP
+#if !hf_block && !CC2650_FAST_RADIO_STARTUP
   /* Switch HF clock source to the RCOSC to preserve power.
    * This must be done after stopping RAT.
    */
